@@ -15,8 +15,11 @@
 package cmd
 
 import (
-	"fmt"
+	"log"
+	"net"
 
+	"github.com/juju/errors"
+	"github.com/service-exposer/uot/protocal"
 	"github.com/spf13/cobra"
 )
 
@@ -24,10 +27,6 @@ import (
 var serverCmd = &cobra.Command{
 	Use:   "server",
 	Short: "Listen tcp address,forward data to target udp address",
-	Run: func(cmd *cobra.Command, args []string) {
-		// TODO: Work your own magic here
-		fmt.Println("server called")
-	},
 }
 
 func init() {
@@ -43,4 +42,28 @@ func init() {
 	// is called directly, e.g.:
 	// serverCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
 
+	var (
+		listen_addr = "localhost:"
+		target_addr = ""
+	)
+	serverCmd.Flags().StringVarP(&listen_addr, "listen", "l", listen_addr, "listen TCP address")
+	serverCmd.Flags().StringVarP(&target_addr, "target", "t", target_addr, "target UDP address")
+
+	serverCmd.Run = func(cmd *cobra.Command, args []string) {
+		ln, err := net.Listen("tcp", listen_addr)
+		if err != nil {
+			Exit(-1, errors.ErrorStack(errors.Trace(err)))
+		}
+
+		addr, err := net.ResolveUDPAddr("udp", target_addr)
+		if err != nil {
+			Exit(-2, errors.ErrorStack(errors.Trace(err)))
+		}
+
+		for {
+			err = protocal.ServerSide(ln.Accept, addr)
+			log.Print(errors.ErrorStack(errors.Trace(err)))
+		}
+
+	}
 }

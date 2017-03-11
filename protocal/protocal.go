@@ -1,9 +1,11 @@
 package protocal
 
 import (
+	"encoding/base64"
 	"net"
 	"time"
 
+	"github.com/Sirupsen/logrus"
 	"github.com/juju/errors"
 	"github.com/service-exposer/uot/packet"
 )
@@ -14,14 +16,22 @@ func ServerSide(accept func() (net.Conn, error), target net.Addr) error {
 		if err != nil {
 			return errors.Trace(err)
 		}
+		log.WithField("remote", conn.RemoteAddr()).
+			Info("new conn")
 
 		pconn, err := net.ListenPacket("udp", "") // listen random address
 		if err != nil {
 			conn.Close()
 			return errors.Trace(err)
 		}
+		log.WithField("addr", pconn.LocalAddr()).
+			Info("listen random UDP addr")
 
 		go func() { // conn -> pconn
+			defer log.WithFields(logrus.Fields{
+				"conn":  conn.RemoteAddr(),
+				"pconn": conn.LocalAddr(),
+			}).Info("close conn -> pconn")
 			defer pconn.Close()
 			defer conn.Close()
 
@@ -42,6 +52,10 @@ func ServerSide(accept func() (net.Conn, error), target net.Addr) error {
 		}()
 
 		go func() { // pconn <- conn
+			defer log.WithFields(logrus.Fields{
+				"conn":  conn.RemoteAddr(),
+				"pconn": conn.LocalAddr(),
+			}).Info("close pconn -> conn")
 			defer pconn.Close()
 			defer conn.Close()
 
@@ -75,7 +89,22 @@ func ClientSide(nat *NAT, pconn net.PacketConn) error {
 
 		data := buf[:n]
 
-		nat.Send(fromAddr, data)
+		log.WithField("data", base64.StdEncoding.EncodeToString(data)).
+			Infoln("read from", fromAddr)
+
+		isNewFromAddr, err := nat.Setup(fromAddr)
+		if err != nil {
+			return errors.Trace(err)
+		}
+		err = nat.Send(fromAddr, data)
+		if err != nil {
+			return errors.Trace(err)
+		}
+
+		if !isNewFromAddr {
+			continue
+		}
+
 		go func(addr net.Addr) {
 			conn := nat.Get(addr)
 			if conn == nil {

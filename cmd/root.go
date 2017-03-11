@@ -38,3 +38,8 @@ func Execute() {
 
 func init() {
 }
+
+func Exit(code int, args ...interface{}) {
+	fmt.Fprintln(os.Stderr, args...)
+	os.Exit(code)
+}

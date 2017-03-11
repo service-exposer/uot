@@ -1,10 +1,12 @@
 package protocal
 
 import (
+	"encoding/base64"
 	"net"
 	"sync"
 	"time"
 
+	"github.com/Sirupsen/logrus"
 	"github.com/juju/errors"
 	"github.com/service-exposer/uot/packet"
 )
@@ -32,19 +34,23 @@ func NewNAT() *NAT {
 	}
 }
 
-func (nat *NAT) Setup(from net.Addr) error {
+func (nat *NAT) Setup(from net.Addr) (ok bool, err error) {
 	nat.mu.Lock()
 	defer nat.mu.Unlock()
-
 	key := from.Network() + from.String()
+	log.WithField("key", key).Debugln("try setup")
 
 	conn, exist := nat.table[key]
 	if !exist {
 		var err error
 		conn, err = nat.Dial()
 		if err != nil {
-			return errors.Trace(err)
+			return false, errors.Trace(err)
 		}
+
+		log.WithFields(logrus.Fields{
+			"key": key,
+		}).Infoln("setup new NAT")
 
 		ch := make(chan []byte, nat.ChannelSize)
 		nat.table[key] = conn
@@ -71,8 +77,9 @@ func (nat *NAT) Setup(from net.Addr) error {
 				conn.SetWriteDeadline(time.Time{})
 			}
 		}(nat, key, conn, ch)
+		return true, nil
 	}
-	return nil
+	return false, nil
 }
 func (nat *NAT) Get(from net.Addr) net.Conn {
 	nat.mu.Lock()
@@ -84,18 +91,22 @@ func (nat *NAT) Send(from net.Addr, data []byte) error {
 	nat.mu.Lock()
 	defer nat.mu.Unlock()
 
-	err := nat.Setup(from)
-	if err != nil {
-		return errors.Trace(err)
-	}
-
 	conn := nat.table[from.Network()+from.String()]
 	sendch := nat.sendchans[conn]
 	select {
 	case sendch <- data:
+		log.WithField("tcp", conn.RemoteAddr()).
+			WithField("data", base64.StdEncoding.EncodeToString(data)).
+			Info("write to TCP")
 		return nil
 	default:
-		return errors.New("send channel buffer filled")
+		err := errors.New("send channel buffer filled")
+		log.WithField("tcp", conn.RemoteAddr()).
+			WithField("data", base64.StdEncoding.EncodeToString(data)).
+			WithField("err", errors.ErrorStack(errors.Trace(err))).
+			Info("write error")
+
+		return errors.Trace(err)
 	}
 }
 
@@ -111,4 +122,8 @@ func (nat *NAT) Remove(addr net.Addr) {
 	}
 	delete(nat.table, key)
 	delete(nat.sendchans, conn)
+
+	log.WithFields(logrus.Fields{
+		"key": key,
+	}).Infoln("remove NAT")
 }
