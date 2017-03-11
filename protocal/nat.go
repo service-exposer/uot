@@ -22,6 +22,16 @@ type NAT struct {
 	sendchans map[net.Conn]chan<- []byte
 }
 
+func NewNAT() *NAT {
+	return &NAT{
+		mu:          new(sync.Mutex),
+		ChannelSize: 16,
+		Dial:        nil,
+		table:       make(map[string]net.Conn),
+		sendchans:   make(map[net.Conn]chan<- []byte),
+	}
+}
+
 func (nat *NAT) Setup(from net.Addr) error {
 	nat.mu.Lock()
 	defer nat.mu.Unlock()
