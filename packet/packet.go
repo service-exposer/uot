@@ -59,22 +59,20 @@ func NewBytesPool(size int) BytesPool {
 }
 
 type Packet struct {
-	ID   uint32
 	Len  int
 	Data []byte
 }
 
 func New() *Packet {
 	return &Packet{
-		ID:   0,
 		Len:  0,
 		Data: nil,
 	}
 }
 
 // ReadFrom read packet from r
-// BigEndian(uint16(len)) + BigEndian(uint64(id)) + data
-// len = 2 + 4 + len(data)
+// BigEndian(uint16(len)) + data
+// len = len(data)
 func ReadFrom(r io.Reader, reuse *Packet) (p *Packet, err error) {
 	if reuse != nil {
 		reuse.Reset()
@@ -91,23 +89,12 @@ func ReadFrom(r io.Reader, reuse *Packet) (p *Packet, err error) {
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-
-	if len < 2+4 {
-		panic("bad protocal")
-	}
-	p.Len = int(len - (2 + 4))
-
-	// read id
-	err = binary.Read(r, binary.BigEndian, &p.ID)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-
-	// read data
+	p.Len = int(len)
 	if p.Len == 0 {
 		return p, nil
 	}
 
+	// read data
 	p.Data = Pool.Get(p.Len)[:p.Len]
 	_, err = io.ReadAtLeast(r, p.Data, p.Len)
 	return p, errors.Trace(err)
@@ -116,16 +103,12 @@ func ReadFrom(r io.Reader, reuse *Packet) (p *Packet, err error) {
 // WriteTo write package to w
 // Please goto method ReadFrom to see protocal details
 func WriteTo(w io.Writer, p *Packet) (int64, error) {
-	if 2+4+len(p.Data) > 65535 {
+	if len(p.Data) > 65535 {
 		return 0, errors.New("too big data size")
 	}
-	p.Len = int(2 + 4 + len(p.Data))
+	p.Len = int(len(p.Data))
 
 	err := binary.Write(w, binary.BigEndian, uint16(p.Len))
-	if err != nil {
-		return 0, errors.Trace(err)
-	}
-	err = binary.Write(w, binary.BigEndian, p.ID)
 	if err != nil {
 		return 0, errors.Trace(err)
 	}
@@ -135,7 +118,6 @@ func WriteTo(w io.Writer, p *Packet) (int64, error) {
 
 // Reset reuse Packet
 func (p *Packet) Reset() {
-	p.ID = 0
 	p.Len = 0
 	if p.Data != nil {
 		Pool.Put(p.Data)

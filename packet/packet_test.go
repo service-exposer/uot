@@ -26,9 +26,6 @@ func TestPacket(t *testing.T) {
 				log.Fatal(errors.ErrorStack(errors.Trace(err)))
 			}
 
-			if p.ID != 1 {
-				log.Fatal("expect 1 got ", p.ID)
-			}
 			if p.Len != 5 {
 				log.Fatal("expect 5 got ", p.Len)
 			}
@@ -44,7 +41,6 @@ func TestPacket(t *testing.T) {
 		p := New()
 		for i := 0; i < N; i++ {
 			p.Reset()
-			p.ID = 1
 			p.Data = []byte("hello")
 
 			_, err := WriteTo(c, p)
