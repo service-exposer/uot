@@ -11,7 +11,7 @@ import (
 	"github.com/service-exposer/uot/packet"
 )
 
-const MaxUDPPacketSize = 65535
+const MaxUDPPacketSize = 4096
 const Timeout = time.Second * 30
 
 type NAT struct {
