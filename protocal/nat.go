@@ -37,6 +37,7 @@ func NewNAT() *NAT {
 func (nat *NAT) Setup(from net.Addr) (ok bool, err error) {
 	nat.mu.Lock()
 	defer nat.mu.Unlock()
+
 	key := from.Network() + from.String()
 	log.WithField("key", key).Debugln("try setup")
 
@@ -60,21 +61,23 @@ func (nat *NAT) Setup(from net.Addr) (ok bool, err error) {
 			defer nat.Remove(from)
 
 			isDone := false
-			p := packet.New()
 			for data := range recv {
 				if isDone {
 					continue
 				}
-				p.Reset()
-				p.Data = data
 
 				conn.SetWriteDeadline(time.Now().Add(Timeout))
-				_, err := packet.WriteTo(conn, p)
+				err := packet.Write(conn, data)
 				if err != nil {
 					isDone = true
 					continue
 				}
 				conn.SetWriteDeadline(time.Time{})
+
+				log.WithField("from", from).
+					WithField("to", conn.LocalAddr()).
+					WithField("data", base64.StdEncoding.EncodeToString(data)).
+					Info("forward udp -> tcp")
 			}
 		}(nat, key, conn, ch)
 		return true, nil
@@ -95,9 +98,6 @@ func (nat *NAT) Send(from net.Addr, data []byte) error {
 	sendch := nat.sendchans[conn]
 	select {
 	case sendch <- data:
-		log.WithField("tcp", conn.RemoteAddr()).
-			WithField("data", base64.StdEncoding.EncodeToString(data)).
-			Info("write to TCP")
 		return nil
 	default:
 		err := errors.New("send channel buffer filled")
@@ -121,7 +121,12 @@ func (nat *NAT) Remove(addr net.Addr) {
 		return
 	}
 	delete(nat.table, key)
+	ch, exist := nat.sendchans[conn]
+	if !exist {
+		return
+	}
 	delete(nat.sendchans, conn)
+	close(ch)
 
 	log.WithFields(logrus.Fields{
 		"key": key,

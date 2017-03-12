@@ -124,3 +124,17 @@ func (p *Packet) Reset() {
 		p.Data = nil
 	}
 }
+
+func Write(w io.Writer, data []byte) error {
+	if len(data) > 65535 {
+		return errors.New("too big data size")
+	}
+
+	err := binary.Write(w, binary.BigEndian, uint16(len(data)))
+	if err != nil {
+		return errors.Trace(err)
+	}
+	_, err = w.Write(data)
+	return errors.Trace(err)
+
+}

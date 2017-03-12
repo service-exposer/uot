@@ -3,6 +3,7 @@ package protocal
 import (
 	"encoding/base64"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/Sirupsen/logrus"
@@ -19,7 +20,7 @@ func ServerSide(accept func() (net.Conn, error), target net.Addr) error {
 		log.WithField("remote", conn.RemoteAddr()).
 			Info("new conn")
 
-		pconn, err := net.ListenPacket("udp", "") // listen random address
+		pconn, err := net.ListenPacket("udp", "localhost:") // listen random address
 		if err != nil {
 			conn.Close()
 			return errors.Trace(err)
@@ -27,13 +28,20 @@ func ServerSide(accept func() (net.Conn, error), target net.Addr) error {
 		log.WithField("addr", pconn.LocalAddr()).
 			Info("listen random UDP addr")
 
-		go func() { // conn -> pconn
-			defer log.WithFields(logrus.Fields{
-				"conn":  conn.RemoteAddr(),
-				"pconn": conn.LocalAddr(),
-			}).Info("close conn -> pconn")
-			defer pconn.Close()
-			defer conn.Close()
+		closeOnce := new(sync.Once)
+		closeConns := func() {
+			closeOnce.Do(func() {
+				pconn.Close()
+				conn.Close()
+				log.WithFields(logrus.Fields{
+					"conn":  conn.RemoteAddr(),
+					"pconn": conn.LocalAddr(),
+				}).Infoln("close pair")
+			})
+		}
+
+		go func(conn net.Conn, pconn net.PacketConn, shutdown func()) { // conn -> pconn
+			defer shutdown()
 
 			p := packet.New()
 			for {
@@ -48,49 +56,58 @@ func ServerSide(accept func() (net.Conn, error), target net.Addr) error {
 				if err != nil {
 					return
 				}
+
+				log.WithFields(logrus.Fields{
+					"from": conn.RemoteAddr(),
+					"via":  pconn.LocalAddr(),
+					"data": base64.StdEncoding.EncodeToString(p.Data[:p.Len]),
+				}).Infoln("forward tcp -> udp")
 			}
-		}()
+		}(conn, pconn, closeConns)
 
-		go func() { // pconn <- conn
-			defer log.WithFields(logrus.Fields{
-				"conn":  conn.RemoteAddr(),
-				"pconn": conn.LocalAddr(),
-			}).Info("close pconn -> conn")
-			defer pconn.Close()
-			defer conn.Close()
+		go func(conn net.Conn, pconn net.PacketConn, shutdown func()) { // pconn <- conn
+			defer shutdown()
 
-			p := packet.New()
+			buf := make([]byte, MaxUDPPacketSize)
 			for {
-				buf := packet.Pool.Get(MaxUDPPacketSize)
+				pconn.SetReadDeadline(time.Now().Add(Timeout))
 				n, _, err := pconn.ReadFrom(buf)
 				if err != nil {
+					log.Error(errors.ErrorStack(errors.Trace(err)))
 					return
 				}
+				pconn.SetReadDeadline(time.Time{})
 
-				p.Data = buf[:n]
-				_, err = packet.WriteTo(conn, p)
+				data := buf[:n]
+
+				conn.SetWriteDeadline(time.Now().Add(Timeout))
+				err = packet.Write(conn, data)
 				if err != nil {
+					log.Error(errors.ErrorStack(errors.Trace(err)))
 					return
 				}
+				conn.SetWriteDeadline(time.Time{})
 
+				log.WithFields(logrus.Fields{
+					"from": pconn.LocalAddr(),
+					"to":   conn.RemoteAddr(),
+					"data": base64.StdEncoding.EncodeToString(data),
+				}).Infoln("forward udp -> tcp")
 				packet.Pool.Put(buf)
 			}
-		}()
+		}(conn, pconn, closeConns)
 	}
 }
 
 func ClientSide(nat *NAT, pconn net.PacketConn) error {
 	for {
-		buf := packet.Pool.Get(MaxUDPPacketSize)
+		buf := make([]byte, MaxUDPPacketSize)
 		n, fromAddr, err := pconn.ReadFrom(buf)
 		if err != nil {
 			return errors.Trace(err)
 		}
 
 		data := buf[:n]
-
-		log.WithField("data", base64.StdEncoding.EncodeToString(data)).
-			Infoln("read from", fromAddr)
 
 		isNewFromAddr, err := nat.Setup(fromAddr)
 		if err != nil {
@@ -120,14 +137,32 @@ func ClientSide(nat *NAT, pconn net.PacketConn) error {
 				conn.SetReadDeadline(time.Now().Add(Timeout))
 				p, err = packet.ReadFrom(conn, p)
 				if err != nil {
+					log.WithFields(logrus.Fields{
+						"from":  conn.LocalAddr(),
+						"err":   err,
+						"stack": errors.ErrorStack(errors.Trace(err)),
+					}).Warnln("read tcp")
+
 					return
 				}
 				conn.SetReadDeadline(time.Time{})
 
 				_, err = pconn.WriteTo(p.Data[:p.Len], addr)
 				if err != nil {
+					log.WithFields(logrus.Fields{
+						"to":    addr,
+						"err":   err,
+						"stack": errors.ErrorStack(errors.Trace(err)),
+					}).Warnln("write udp")
 					return
 				}
+
+				log.WithFields(logrus.Fields{
+					"from": conn.LocalAddr(),
+					"to":   addr.String(),
+					"data": base64.StdEncoding.EncodeToString(p.Data[:p.Len]),
+				}).Infoln("forward tcp -> udp")
+
 			}
 		}(fromAddr)
 	}
